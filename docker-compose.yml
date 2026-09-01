@@ -1,0 +1,29 @@
+# Docker Compose for deploying n8n + this workflow.
+# Used when we move off the laptop to a real server (Oracle free tier, Render, etc.).
+# For LOCAL dev we run `npx n8n` instead — see README.
+#
+# Usage on a server:
+#   1. Copy this file + .env to the server
+#   2. `docker compose up -d`
+#   3. Import workflows/email-to-slack.json in the n8n UI
+#   4. Set up a reverse proxy (Caddy/Nginx) + TLS when ready
+
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: email-to-slack-n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    env_file:
+      - .env
+    environment:
+      # Persist n8n data + workflows + credentials on the host
+      - N8N_USER_FOLDER=/home/node/.n8n
+    volumes:
+      - n8n_data:/home/node/.n8n
+      # Mount the workflow file so it's easy to re-import
+      - ./workflows:/workflows:ro
+
+volumes:
+  n8n_data:

@@ -1,0 +1,27 @@
+{
+  "name": "email-to-slack",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Automated email intelligence workflow: Gmail → n8n → Gemini → Slack.",
+  "scripts": {
+    "start": "npx n8n",
+    "start:tunnel": "npx n8n --tunnel",
+    "export:workflow": "echo 'Export the workflow from the n8n UI: Workflows → ⋯ → Download'",
+    "format": "prettier --write ."
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "prettier": "^3.3.0"
+  },
+  "keywords": [
+    "n8n",
+    "gmail",
+    "slack",
+    "gemini",
+    "ai",
+    "automation"
+  ],
+  "license": "MIT"
+}
