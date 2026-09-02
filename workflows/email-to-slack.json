@@ -1,0 +1,415 @@
+{
+  "name": "Email to Slack",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "event": "messageReceived",
+        "options": {
+          "downloadAttachments": false,
+          "simplify": true
+        }
+      },
+      "id": "gmail-trigger-001",
+      "name": "Gmail Trigger",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "gmail-trigger-webhook",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_WITH_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "lookup",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "processed",
+          "mode": "name"
+        },
+        "lookupColumn": "messageId",
+        "lookupValue": "={{ $json.id }}",
+        "options": {}
+      },
+      "id": "sheets-lookup-001",
+      "name": "Dedup Lookup",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        500,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.messageId }}",
+              "rightValue": "",
+              "operator": {
+                "type": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-already-processed-001",
+      "name": "Already Processed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        760,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build a clean text blob for Gemini: subject + from + date + plain body.\n// We strip HTML and collapse whitespace so the LLM gets a tidy input.\nconst item = $input.first().json;\n\nconst subject = item.subject || item.headers?.subject || '';\nconst from    = item.from    || item.headers?.from    || '';\nconst date    = item.date    || item.headers?.date    || '';\n\n// Gmail \"simplify\" puts the body in item.text or item.textPlain or item.body\nlet body = item.text || item.textPlain || item.body || item.snippet || '';\n\n// If we still got HTML, strip tags crudely\nif (/<[a-z][\\s\\S]*>/i.test(body)) {\n  body = body\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, '')\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n    .replace(/<\\/?[^>]+>/g, ' ')\n    .replace(/&nbsp;/g, ' ')\n    .replace(/&amp;/g, '&')\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"');\n}\n\nbody = body.replace(/\\s+/g, ' ').trim().slice(0, 8000); // cap length\n\nreturn [{\n  json: {\n    messageId: item.id,\n    threadId:  item.threadId,\n    subject,\n    from,\n    date,\n    body\n  }\n}];\n"
+      },
+      "id": "code-prepare-001",
+      "name": "Prepare Email Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1020,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "x-goog-api-key",
+              "value": "REPLACE_WITH_GEMINI_API_KEY"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [\n    {\n      \"role\": \"user\",\n      \"parts\": [\n        {\n          \"text\": \"You are an email assistant. Read the email below and return ONLY a strict JSON object (no markdown, no backticks) with exactly these keys:\\n\\n  summary:    string, 1-3 sentences capturing the essential information.\\n  priority:   one of \\\"Low\\\", \\\"Medium\\\", \\\"High\\\" based on urgency and importance.\\n  action_items: array of short strings (each a concrete action the recipient should take). Empty array if none.\\n  deadline:   string, the due date or time-sensitivity mentioned, or null.\\n\\nRules:\\n- Be concise. Summary must be ≤ 60 words.\\n- priority \\\"High\\\" only for time-critical items (e.g. deadlines within 24-48h, security alerts, payment failures).\\n- action_items must be specific (verb + object).\\n- If a field is unknown, use null or [] as appropriate.\\n\\n--- EMAIL ---\\nFrom: {{ $json.from }}\\nSubject: {{ $json.subject }}\\nDate: {{ $json.date }}\\n\\n{{ $json.body }}\"\n        }\n      ]\n    }\n  ],\n  \"generationConfig\": {\n    \"temperature\": 0.2,\n    \"responseMimeType\": \"application/json\"\n  }\n}",
+        "options": {}
+      },
+      "id": "http-gemini-001",
+      "name": "Gemini Summarize",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1280,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Gemini's response and normalize it. Falls back to a safe default if parsing fails.\nconst out = $input.first().json;\nconst prepared = $('Prepare Email Text').first().json;\n\nlet parsed = null;\ntry {\n  // Gemini returns { candidates: [ { content: { parts: [ { text: \"...\" } ] } } ] }\n  const text = out?.candidates?.[0]?.content?.parts?.[0]?.text;\n  if (text) parsed = JSON.parse(text);\n} catch (e) {\n  parsed = null;\n}\n\nconst safe = parsed || {\n  summary: (prepared.body || '').slice(0, 200) || '(no summary available)',\n  priority: 'Low',\n  action_items: [],\n  deadline: null\n};\n\nreturn [{\n  json: {\n    messageId: prepared.messageId,\n    subject:   prepared.subject,\n    from:      prepared.from,\n    date:      prepared.date,\n    summary:   String(safe.summary || '').slice(0, 1000),\n    priority:  ['Low', 'Medium', 'High'].includes(safe.priority) ? safe.priority : 'Low',\n    action_items: Array.isArray(safe.action_items) ? safe.action_items.slice(0, 10).map(String) : [],\n    deadline: safe.deadline ? String(safe.deadline).slice(0, 200) : null\n  }\n}];\n"
+      },
+      "id": "code-parse-001",
+      "name": "Parse Gemini JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build a Slack Block Kit message.\n// Header (subject), context (from + date + priority), summary, action items, deadline, footer with messageId.\n\nconst d = $input.first().json;\n\nconst priorityEmoji = d.priority === 'High' ? '🔴'\n                    : d.priority === 'Medium' ? '🟡'\n                    : '🟢';\n\nconst priorityColor = d.priority === 'High' ? '#e01e5a'\n                     : d.priority === 'Medium' ? '#ecb22e'\n                     : '#2eb67d';\n\nconst blocks = [\n  {\n    type: 'header',\n    text: { type: 'plain_text', text: (d.subject || '(no subject)').slice(0, 150), emoji: false }\n  },\n  {\n    type: 'context',\n    elements: [\n      { type: 'mrkdwn', text: `*From:* ${d.from || 'unknown'}` },\n      { type: 'mrkdwn', text: `*Date:* ${d.date || 'unknown'}` },\n      { type: 'mrkdwn', text: `*Priority:* ${priorityEmoji} ${d.priority}` }\n    ]\n  },\n  { type: 'divider' },\n  {\n    type: 'section',\n    text: { type: 'mrkdwn', text: `*Summary*\\n${d.summary || '_no summary_'}` }\n  }\n];\n\nif (Array.isArray(d.action_items) && d.action_items.length) {\n  blocks.push({\n    type: 'section',\n    text: {\n      type: 'mrkdwn',\n      text: '*Action items*\\n' + d.action_items.map(a => `• ${a}`).join('\\n')\n    }\n  });\n}\n\nif (d.deadline) {\n  blocks.push({\n    type: 'section',\n    text: { type: 'mrkdwn', text: `*Deadline:* ⏰ ${d.deadline}` }\n  });\n}\n\nblocks.push({ type: 'divider' });\nblocks.push({\n  type: 'context',\n  elements: [\n    { type: 'mrkdwn', text: `messageId: \\`${d.messageId}\\`` }\n  ]\n});\n\nreturn [{\n  json: {\n    channel: 'REPLACE_WITH_SLACK_CHANNEL_ID',\n    text: `📧 ${d.subject || 'New email'} — ${priorityEmoji} ${d.priority}`,\n    blocks: JSON.stringify(blocks),\n    attachments: JSON.stringify([{ color: priorityColor }]),\n    messageId: d.messageId,\n    subject:   d.subject,\n    from:      d.from,\n    priority:  d.priority\n  }\n}];\n"
+      },
+      "id": "code-slack-001",
+      "name": "Build Slack Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SLACK_CHANNEL_ID",
+          "mode": "id"
+        },
+        "messageType": "blockKit",
+        "text": "={{ $json.text }}",
+        "blocksUi": "={{ $json.blocks }}",
+        "otherOptions": {
+          "attachments": "={{ $json.attachments }}"
+        }
+      },
+      "id": "slack-post-001",
+      "name": "Post to Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [
+        2060,
+        180
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "REPLACE_WITH_SLACK_CREDENTIAL_ID",
+          "name": "Slack bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "processed",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "messageId": "={{ $json.messageId }}",
+            "subject": "={{ $json.subject }}",
+            "sender": "={{ $json.from }}",
+            "processedAt": "={{ $now.toISO() }}",
+            "priority": "={{ $json.priority }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "messageId",
+              "displayName": "messageId",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true
+            },
+            {
+              "id": "subject",
+              "displayName": "subject",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true
+            },
+            {
+              "id": "sender",
+              "displayName": "sender",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true
+            },
+            {
+              "id": "processedAt",
+              "displayName": "processedAt",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true
+            },
+            {
+              "id": "priority",
+              "displayName": "priority",
+              "type": "string",
+              "required": false,
+              "defaultMatch": false,
+              "display": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "sheets-append-001",
+      "name": "Mark Processed",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        2320,
+        180
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// No-op end node for the TRUE branch (already processed). Lets the run finish cleanly.\nreturn [{ json: { skipped: true, reason: 'already processed' } }];\n"
+      },
+      "id": "no-op-001",
+      "name": "Skip (already processed)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1020,
+        460
+      ]
+    }
+  ],
+  "connections": {
+    "Gmail Trigger": {
+      "main": [
+        [
+          {
+            "node": "Dedup Lookup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dedup Lookup": {
+      "main": [
+        [
+          {
+            "node": "Already Processed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Already Processed?": {
+      "main": [
+        [
+          {
+            "node": "Skip (already processed)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Email Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Email Text": {
+      "main": [
+        [
+          {
+            "node": "Gemini Summarize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Summarize": {
+      "main": [
+        [
+          {
+            "node": "Parse Gemini JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Gemini JSON": {
+      "main": [
+        [
+          {
+            "node": "Build Slack Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Slack Message": {
+      "main": [
+        [
+          {
+            "node": "Post to Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post to Slack": {
+      "main": [
+        [
+          {
+            "node": "Mark Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "email"
+    },
+    {
+      "name": "slack"
+    },
+    {
+      "name": "ai"
+    }
+  ],
+  "meta": {
+    "description": "Gmail → Gemini → Slack email intelligence pipeline",
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}
