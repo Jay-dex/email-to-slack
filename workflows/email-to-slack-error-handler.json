@@ -1,0 +1,96 @@
+{
+  "name": "Email to Slack — Error Handler",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "email-to-slack-error",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "error-trigger-001",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "email-to-slack-error-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format error payload for Slack.\nconst e = $input.first().json;\n\nconst workflowName = e.workflow?.name || 'unknown workflow';\nconst executionId  = e.executionId || 'unknown';\nconst errorMsg     = e.error?.message || e.error || 'unknown error';\nconst nodeName     = e.node?.name || 'unknown node';\nconst nodeType     = e.node?.type || 'unknown type';\n\nreturn [{ json: {\n  workflowName,\n  executionId,\n  nodeName,\n  nodeType,\n  errorMsg: String(errorMsg).slice(0, 1500),\n  text: `❌ *${workflowName}* failed at *${nodeName}* (${nodeType})\\n\\n*Error:*\\n\\`\\`\\`${errorMsg}\\`\\`\\`\\n\\nexecutionId: \\`${executionId}\\``\n}}];\n"
+      },
+      "id": "code-format-err-001",
+      "name": "Format Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": { "__rl": true, "value": "REPLACE_WITH_SLACK_CHANNEL_ID", "mode": "id" },
+        "messageType": "mrkdwn",
+        "text": "={{ $json.text }}",
+        "otherOptions": {}
+      },
+      "id": "slack-error-001",
+      "name": "Notify Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [760, 300],
+      "credentials": { "slackApi": { "id": "REPLACE_WITH_SLACK_CREDENTIAL_ID", "name": "Slack bot" } }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": { "__rl": true, "value": "REPLACE_WITH_GOOGLE_SHEET_ID", "mode": "id" },
+        "sheetName":   { "__rl": true, "value": "failures", "mode": "name" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "executionId":  "={{ $json.executionId }}",
+            "workflowName": "={{ $json.workflowName }}",
+            "nodeName":     "={{ $json.nodeName }}",
+            "nodeType":     "={{ $json.nodeType }}",
+            "errorMessage": "={{ $json.errorMsg }}",
+            "failedAt":     "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            { "id": "executionId",  "displayName": "executionId",  "type": "string", "required": false, "defaultMatch": false, "display": true },
+            { "id": "workflowName", "displayName": "workflowName", "type": "string", "required": false, "defaultMatch": false, "display": true },
+            { "id": "nodeName",     "displayName": "nodeName",     "type": "string", "required": false, "defaultMatch": false, "display": true },
+            { "id": "nodeType",     "displayName": "nodeType",     "type": "string", "required": false, "defaultMatch": false, "display": true },
+            { "id": "errorMessage", "displayName": "errorMessage", "type": "string", "required": false, "defaultMatch": false, "display": true },
+            { "id": "failedAt",     "displayName": "failedAt",     "type": "string", "required": false, "defaultMatch": false, "display": true }
+          ]
+        },
+        "options": {}
+      },
+      "id": "sheets-failures-001",
+      "name": "Log to Failures Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1020, 300],
+      "credentials": { "googleSheetsOAuth2Api": { "id": "REPLACE_WITH_SHEETS_CREDENTIAL_ID", "name": "Google Sheets account" } }
+    }
+  ],
+  "connections": {
+    "Error Trigger":         { "main": [ [ { "node": "Format Error", "type": "main", "index": 0 } ] ] },
+    "Format Error":          { "main": [ [ { "node": "Notify Slack", "type": "main", "index": 0 } ] ] },
+    "Notify Slack":          { "main": [ [ { "node": "Log to Failures Sheet", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [ { "name": "email" }, { "name": "slack" }, { "name": "errors" } ],
+  "meta": {
+    "description": "Catches any failure from the main Email-to-Slack workflow and notifies Slack + logs to a failures Sheet tab. Activate BEFORE the main workflow.",
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}
