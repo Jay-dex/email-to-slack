@@ -18,16 +18,6 @@
     },
     {
       "parameters": {
-        "jsCode": "// Strip HTML, drop quoted reply chains, collapse whitespace, cap length.\nconst item = $input.first().json;\n\nconst subject = item.subject || item.headers?.subject || '(no subject)';\nconst from    = item.from    || item.headers?.from    || 'unknown sender';\nconst date    = item.date    || item.headers?.date    || new Date().toISOString();\nconst labels  = item.labels || item.labelIds || [];\n\nlet body = item.text || item.textPlain || item.body || item.snippet || '';\n\nif (/<[a-z][\\s\\S]*>/i.test(body)) {\n  body = body\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, '')\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n    .replace(/<\\/?[^>]+>/g, ' ')\n    .replace(/&nbsp;/g, ' ')\n    .replace(/&amp;/g, '&')\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"')\n    .replace(/&#39;/g, \"'\");\n}\n\nbody = body.replace(/On .+ wrote:\\s*[\\s\\S]*$/i, '');\nbody = body.replace(/\\s+/g, ' ').trim().slice(0, 8000);\n\nreturn [{ json: { messageId: item.id, threadId: item.threadId, subject, from, date, labels, body } }];\n"
-      },
-      "id": "code-clean-001",
-      "name": "Clean Body",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [460, 300]
-    },
-    {
-      "parameters": {
         "conditions": {
           "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "loose" },
           "conditions": [
@@ -44,7 +34,7 @@
       "name": "Skip Noise?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [720, 300]
+      "position": [460, 300]
     },
     {
       "parameters": {
@@ -54,7 +44,17 @@
       "name": "Drop Noise",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [980, 500]
+      "position": [720, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Strip HTML, drop quoted reply chains, collapse whitespace, cap length.\nconst item = $input.first().json;\n\nconst subject = item.subject || item.headers?.subject || '(no subject)';\nconst from    = item.from    || item.headers?.from    || 'unknown sender';\nconst date    = item.date    || item.headers?.date    || new Date().toISOString();\nconst labels  = item.labels || item.labelIds || [];\n\nlet body = item.text || item.textPlain || item.body || item.snippet || '';\n\nif (/<[a-z][\\s\\S]*>/i.test(body)) {\n  body = body\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, '')\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n    .replace(/<\\/?[^>]+>/g, ' ')\n    .replace(/&nbsp;/g, ' ')\n    .replace(/&amp;/g, '&')\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"')\n    .replace(/&#39;/g, \"'\");\n}\n\nbody = body.replace(/On .+ wrote:\\s*[\\s\\S]*$/i, '');\nbody = body.replace(/\\s+/g, ' ').trim().slice(0, 8000);\n\nreturn [{ json: { messageId: item.id, threadId: item.threadId, subject, from, date, labels, body } }];\n"
+      },
+      "id": "code-clean-001",
+      "name": "Clean Body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 300]
     },
     {
       "parameters": {
@@ -107,7 +107,7 @@
         "headerParameters": {
           "parameters": [
             { "name": "Content-Type", "value": "application/json" },
-            { "name": "x-goog-api-key", "value": "REPLACE_WITH_GEMINI_API_KEY" }
+            { "name": "x-goog-api-key", "value": "={{ $env.GEMINI_API_KEY }}" }
           ]
         },
         "sendBody": true,
@@ -193,15 +193,15 @@
     }
   ],
   "connections": {
-    "Gmail Trigger":      { "main": [ [ { "node": "Clean Body",         "type": "main", "index": 0 } ] ] },
-    "Clean Body":         { "main": [ [ { "node": "Skip Noise?",        "type": "main", "index": 0 } ] ] },
-    "Skip Noise?":        { "main": [ [ { "node": "Dedup Lookup",      "type": "main", "index": 0 } ], [ { "node": "Drop Noise", "type": "main", "index": 0 } ] ] },
-    "Dedup Lookup":       { "main": [ [ { "node": "Already Processed?", "type": "main", "index": 0 } ] ] },
+    "Gmail Trigger":      { "main": [ [ { "node": "Skip Noise?",         "type": "main", "index": 0 } ] ] },
+    "Skip Noise?":        { "main": [ [ { "node": "Clean Body",          "type": "main", "index": 0 } ], [ { "node": "Drop Noise", "type": "main", "index": 0 } ] ] },
+    "Clean Body":         { "main": [ [ { "node": "Dedup Lookup",        "type": "main", "index": 0 } ] ] },
+    "Dedup Lookup":       { "main": [ [ { "node": "Already Processed?",  "type": "main", "index": 0 } ] ] },
     "Already Processed?": { "main": [ [ { "node": "Skip (already processed)", "type": "main", "index": 0 } ], [ { "node": "Gemini Summarize", "type": "main", "index": 0 } ] ] },
-    "Gemini Summarize":   { "main": [ [ { "node": "Parse Gemini JSON",  "type": "main", "index": 0 } ] ] },
-    "Parse Gemini JSON":  { "main": [ [ { "node": "Build Slack Message","type": "main", "index": 0 } ] ] },
-    "Build Slack Message":{ "main": [ [ { "node": "Post to Slack",      "type": "main", "index": 0 } ] ] },
-    "Post to Slack":      { "main": [ [ { "node": "Mark Processed",     "type": "main", "index": 0 } ] ] }
+    "Gemini Summarize":   { "main": [ [ { "node": "Parse Gemini JSON",   "type": "main", "index": 0 } ] ] },
+    "Parse Gemini JSON":  { "main": [ [ { "node": "Build Slack Message", "type": "main", "index": 0 } ] ] },
+    "Build Slack Message":{ "main": [ [ { "node": "Post to Slack",       "type": "main", "index": 0 } ] ] },
+    "Post to Slack":      { "main": [ [ { "node": "Mark Processed",      "type": "main", "index": 0 } ] ] }
   },
   "settings": {
     "executionOrder": "v1",
@@ -213,7 +213,7 @@
   "staticData": null,
   "tags": [ { "name": "email" }, { "name": "slack" }, { "name": "ai" } ],
   "meta": {
-    "description": "Gmail -> clean body -> skip noise -> dedup -> Gemini -> Slack -> mark processed. v2 with HTML cleaning, noise filter, category field, and error workflow reference.",
+    "description": "Gmail -> skip noise -> clean body -> dedup -> Gemini -> Slack -> mark processed. v2.1: filter first to skip regex on noise, and Gemini key read from $env at runtime (never baked into JSON).",
     "templateCredsSetupCompleted": false
   },
   "pinData": {}
